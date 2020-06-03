@@ -1,5 +1,5 @@
 # Using GANs to restore low-bitrate MP3s
-####Usage:
+##Usage:
 Copy a bunch of good-sounding mp3's into data/mp3_high
 Run the convert.py tool to re-encode them into garbage-sounding 64kbps MP3s
 
