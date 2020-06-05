@@ -7,6 +7,7 @@ import subprocess
 import sys
 import os
 
+# do some cleanup of old MP3s that shouldnt be here
 for f in glob.glob("mp3_low/*"):
     os.remove(f)
 
