@@ -10,6 +10,8 @@ from matplotlib import pyplot as plt
 from gan import DiscrNet, ReconNet
 from data_utils import get_stft, get_istft, load_dataset, make_batch
 
+from scipy.io import wavfile
+
 def detach_numpy(x):
     return x.detach().cpu().numpy()
 
