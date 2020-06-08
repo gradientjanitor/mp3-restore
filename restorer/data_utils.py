@@ -35,7 +35,7 @@ def get_istft(x):
 def load_dataset(data_dir, fft_len=512, nsamp=None):
     sample_pairs = []
 
-    files = glob.glob("%s/*_high.wav" % data_dir)[:64]
+    files = glob.glob("%s/*_high.wav" % data_dir)
     if nsamp is not None:
         files = files[:1]
 
@@ -85,8 +85,8 @@ def make_batch(sample_pairs, batch_size, datadim, nsteps=64, cuda=False):
         compr_sample = compr_sample[:,sstart:sstart+nsteps]
         orig_sample = orig_sample[:,sstart:sstart+nsteps]
 
-        x[i,:,:] = compr_sample
-        y[i,:,:] = orig_sample
+        x[i,:,:] = compr_sample[:compr_sample.shape[0] // 2,:]
+        y[i,:,:] = orig_sample[:orig_sample.shape[0] // 2,:]
 
     x, y = torch.from_numpy(x), torch.from_numpy(y)
     if cuda:

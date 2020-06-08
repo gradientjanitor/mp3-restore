@@ -7,7 +7,7 @@ Run restorer/train.py to train a GAN that tries to reconstruct portions of the l
 
 Currently, it sounds pretty okay after training for a while, but some MP3 artifacting remains.
 
-Here's an example reconstruction of the spectrogram (x is the low-bitrate mp3, y is the high-bitrate mp3, and o is the reconstruction of the low-bitrate mp3):
+Here's an example reconstruction of the spectrogram:
 ![GitHub Logo](example_reconstruction.png)
 
 More to come!
