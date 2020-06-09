@@ -17,6 +17,7 @@ def detach_numpy(x):
     return x.detach().cpu().numpy()
 
 def restore_sample(s, gen, filename="best_recon.wav"):
+    print("restoring", s[-1])
     # get a sample.
     compr_sample_l = np.expand_dims(s[0], 0)
     compr_sample_r = np.expand_dims(s[2], 0)
@@ -83,16 +84,15 @@ print("done.")
 from importlib import reload
 reload(gan)
 gen = gan.ReconNet(datadim, kernel_sz=kernel_sz, num_chan=num_chan, residual=residual).cuda()
-discr = gan.DiscrNet(x.cpu(), datadim, kernel_sz=9, num_chan=[16,32,64,96,128]).cuda()
+discr = gan.DiscrNet(x.cpu(), datadim, kernel_sz=9, num_chan=[32,64,128,192,256]).cuda()
 gen_opt = optim.Adam(gen.parameters(), lr=lr)
 discr_opt = optim.Adam(discr.parameters(), lr=lr)
 
-loss_avg, discr_losses, discr_accs, gen_gan_losses, gen_mae_losses = [], [], [], [], []
+loss_avg, discr_losses, discr_accs, discr_gen_accs, gen_gan_losses, gen_mse_losses = [], [], [], [], [], []
 
 i = 0
 while True:
     i += 1
-    x, y = make_batch(sample_pairs, batch_size, datadim, nsteps=nsteps, cuda=True)
 
     # make sure models are in training mode (so dropout/batchnorm/etc all work properly)
     gen.train()
@@ -102,49 +102,59 @@ while True:
     gen_opt.zero_grad()
     discr_opt.zero_grad()
 
-    # train generator
-    gen_out = gen.forward(x)
-    discr_gen_out = discr.forward(gen_out)
-
-    # cross entropy for GAN + l1 loss for reconstruction
-    gen_gan_loss = nn.BCEWithLogitsLoss()(discr_gen_out, torch.ones(gen_out.shape[0], 1).cuda())
-    gen_mae_loss = torch.mean(torch.abs(gen_out - y))
-    gen_loss = gen_gan_loss + gen_mae_loss
-    gen_loss.backward()
-    gen_opt.step()
-
     # train discriminator
+    # get fresh data.  mmm
+    x, y = make_batch(sample_pairs, batch_size, datadim, nsteps=nsteps, cuda=True)
+    gen_out = gen.forward(x)
+
     fake_data = gen_out.detach()
     real_data = y.detach()
     nsamp = x.shape[0]
-    fake_labels = torch.zeros(nsamp,1).cuda()
-    real_labels = torch.ones(nsamp,1).cuda()
+    real_labels = torch.zeros(nsamp,1).cuda()
+    fake_labels = torch.ones(nsamp,1).cuda()
 
     data = torch.cat([real_data, fake_data], dim=0).detach()
     labels = torch.cat([real_labels, fake_labels], dim=0).detach()
 
     discr_out = discr.forward(data)
+    # discr_loss = -(torch.mean(discr_out[:discr_out.shape[0]//2]) - torch.mean(discr_out[discr_out.shape[0]//2:]))
     discr_loss = nn.BCEWithLogitsLoss()(discr_out, labels)
-    discr_acc = np.mean((detach_numpy(discr_out) > 0.5) == (detach_numpy(labels) > 0.5))
+    discr_acc = np.mean((detach_numpy(discr_out) > 0) == (detach_numpy(labels) > 0.5))
 
     discr_loss.backward()
     discr_opt.step()
+    
+    # train generator
+    x, y = make_batch(sample_pairs, batch_size, datadim, nsteps=nsteps, cuda=True)
+    gen_out = gen.forward(x)
+    discr_gen_out = discr.forward(gen_out)
+    discr_gen_acc = np.mean(detach_numpy(discr_gen_out) > 0)
+
+    # cross entropy for GAN + l1 loss for reconstruction
+    gen_gan_loss = nn.BCEWithLogitsLoss()(discr_gen_out, torch.zeros(gen_out.shape[0], 1).cuda())
+    # gen_gan_loss = -torch.mean(discr_gen_out)
+    gen_mse_loss = torch.mean(torch.pow(gen_out - y, 2))
+    gen_loss = gen_gan_loss + gen_mse_loss
+    gen_loss.backward()
+    gen_opt.step()
 
     discr_losses.append(detach_numpy(discr_loss).max())
-    gen_mae_losses.append(detach_numpy(gen_mae_loss).max())
+    gen_mse_losses.append(detach_numpy(gen_mse_loss).max())
     gen_gan_losses.append(detach_numpy(gen_gan_loss).max())
     discr_accs.append(discr_acc)
+    discr_gen_accs.append(discr_gen_acc)
 
-    discr_losses = discr_losses[-1000:]
-    discr_accs = discr_accs[-1000:]
-    gen_gan_losses = gen_gan_losses[-1000:]
-    gen_mae_losses = gen_mae_losses[-1000:]
+    discr_losses = discr_losses[-100:]
+    discr_accs = discr_accs[-100:]
+    discr_gen_accs = discr_gen_accs[-100:]
+    gen_gan_losses = gen_gan_losses[-100:]
+    gen_mse_losses = gen_mse_losses[-100:]
 
     # every once in a while, spit out a spectrogram of the low-bitrate mp3, the orig, and the
     # reconstruction
-    if i % 1000 == 0:
-        print(np.mean(discr_accs), np.mean(discr_losses), np.mean(gen_gan_losses), np.mean(gen_mae_losses))
-
+    if i % 100 == 0:
+        print(gen_out.max(), gen_out.min())
+        print(np.mean(discr_accs), np.mean(discr_gen_accs), np.mean(discr_losses), np.mean(gen_gan_losses), np.mean(gen_mse_losses))
         plot_reconstruction(x[0], y[0], gen_out[0])
         
     # every once in a while, shove a full MP3 throught the model and let's listen to it

@@ -4,7 +4,7 @@ from torch import nn
 from torch import optim
 
 def weight_init(m):
-    if isinstance(m, torch.nn.Conv1d) or isinstance(m, torch.nn.Linear):
+    if isinstance(m, torch.nn.Conv1d) or isinstance(m, torch.nn.Linear) or isinstance(m, torch.nn.Conv2d):
         print(m)
         torch.nn.init.xavier_uniform_(m.weight)
         torch.nn.init.zeros_(m.bias)
@@ -32,7 +32,7 @@ class DiscrNet(nn.Module):
 
             self.layers.append(nn.InstanceNorm2d(curr_chan, affine=True))
             self.layers.append(self.act)
-            self.layers.append(nn.MaxPool2d(2))
+            self.layers.append(nn.AvgPool2d(2))
             dummy = self.layers[-1](dummy)
 
             prev_chan = curr_chan
@@ -55,7 +55,7 @@ class DiscrNet(nn.Module):
         for l in self.out_layers:
             x = l(x)
 
-        return x
+        return x #torch.tanh(x)
 
 class ReconNet(nn.Module):
     def __init__(self, fft_dim, kernel_sz=25, num_chan=[128,256,512,256,128], residual=False):
@@ -73,7 +73,6 @@ class ReconNet(nn.Module):
             self.mag_layers.append(nn.Conv1d(prev_chan + fft_dim, curr_chan, kernel_sz, stride=1, padding=kernel_sz//2, padding_mode='reflect'))
             self.mag_layers.append(nn.BatchNorm1d(curr_chan))
             self.mag_layers.append(self.act)
-            self.mag_layers.append(nn.Dropout())
 
             prev_chan = curr_chan
             
@@ -94,4 +93,5 @@ class ReconNet(nn.Module):
             x = l(x)
             first = False
 
+        x = x + xi
         return x
