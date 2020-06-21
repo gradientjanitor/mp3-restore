@@ -8,13 +8,17 @@ import random
 
 import numpy as np
 
+M = 15
+B = 12
 
 def get_stft(x, fft_len):
     xf = stft(x.flatten(), nperseg=fft_len, return_onesided=True)[2]
 
-    xm = np.log(1e-10+np.abs(xf)) + 8
+    xm = (np.log(1e-10+np.abs(xf)) + B) / M
     xp = np.angle(xf)
     xp /= np.pi
+
+    print(xm.min(), xm.max())
 
     xmp = np.concatenate([xm, xp], axis=0)
 
@@ -23,7 +27,7 @@ def get_stft(x, fft_len):
 
 def get_istft(x):
     fft_dim = x.shape[0] // 2
-    xm = np.exp(x[:fft_dim,:] - 8)
+    xm = np.exp(M * x[:fft_dim,:] - B)
     xp = x[fft_dim:,:] * np.pi
     xf = xm * np.exp(1j * xp)
 

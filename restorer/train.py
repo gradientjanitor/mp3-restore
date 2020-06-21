@@ -40,12 +40,18 @@ def restore_sample(s, gen, filename="best_recon.wav"):
         out_i = get_istft(out)
         outs.append(out_i.reshape(-1,1))
 
+    compr = np.concatenate([get_istft(s[0]).reshape(-1,1), get_istft(s[2]).reshape(-1,1)], axis=1)
+
     outs = np.concatenate(outs, axis=1)
     outs /= np.max(np.abs(outs))
+
+    compr /= np.max(np.abs(compr))
 
     # convert back into 16bit
     outs = (outs * 32767).astype(np.int16)
     wavfile.write(filename, 44100, outs)
+
+    wavfile.write(filename.replace("best", "low"), 44100, (compr*32768).astype(np.int16))
 
     # move back to cuda
     gen = gen.cuda()
@@ -83,7 +89,7 @@ print("done.")
 
 from importlib import reload
 reload(gan)
-gen = gan.ReconNet(datadim, kernel_sz=kernel_sz, num_chan=num_chan, residual=residual).cuda()
+gen = gan.ReconNet(datadim, kernel_sz=kernel_sz, num_layers=10, residual=residual).cuda()
 discr = gan.DiscrNet(x.cpu(), datadim, kernel_sz=9, num_chan=[32,64,128,192,256]).cuda()
 gen_opt = optim.Adam(gen.parameters(), lr=lr)
 discr_opt = optim.Adam(discr.parameters(), lr=lr)
@@ -95,46 +101,50 @@ while True:
     i += 1
 
     # make sure models are in training mode (so dropout/batchnorm/etc all work properly)
-    gen.train()
-    discr.train()
+    gen.train(), discr.train()
 
     # ye olde optimizer grad clear
-    gen_opt.zero_grad()
-    discr_opt.zero_grad()
+    gen_opt.zero_grad(), discr_opt.zero_grad()
 
     # train discriminator
     # get fresh data.  mmm
     x, y = make_batch(sample_pairs, batch_size, datadim, nsteps=nsteps, cuda=True)
     gen_out = gen.forward(x)
 
-    fake_data = gen_out.detach()
-    real_data = y.detach()
     nsamp = x.shape[0]
-    real_labels = torch.zeros(nsamp,1).cuda()
-    fake_labels = torch.ones(nsamp,1).cuda()
+    fake_data, real_data = gen_out.detach(), y.detach()
 
-    data = torch.cat([real_data, fake_data], dim=0).detach()
-    labels = torch.cat([real_labels, fake_labels], dim=0).detach()
+    l = torch.from_numpy((np.random.beta(0.5, 0.5, size=nsamp)).astype(np.float32)).cuda().view(nsamp,1,1)
+    #l = torch.from_numpy((np.random.rand(nsamp) > 0.5).astype(np.float32)).cuda().view(nsamp,1,1)
+    x1 = l * real_data + (1-l) * fake_data
+    x2 = (1-l) * real_data + l * fake_data
 
-    discr_out = discr.forward(data)
-    # discr_loss = -(torch.mean(discr_out[:discr_out.shape[0]//2]) - torch.mean(discr_out[discr_out.shape[0]//2:]))
-    discr_loss = nn.BCEWithLogitsLoss()(discr_out, labels)
-    discr_acc = np.mean((detach_numpy(discr_out) > 0) == (detach_numpy(labels) > 0.5))
+    l = l.view(-1,1)
+
+    discr_out = discr.forward(x1, x2, x)
+    discr_loss = nn.BCEWithLogitsLoss()(discr_out, l)
+    discr_acc = np.mean((detach_numpy(discr_out) > 0) == (detach_numpy(l) > 0.5))
 
     discr_loss.backward()
     discr_opt.step()
-    
+
     # train generator
     x, y = make_batch(sample_pairs, batch_size, datadim, nsteps=nsteps, cuda=True)
     gen_out = gen.forward(x)
-    discr_gen_out = discr.forward(gen_out)
-    discr_gen_acc = np.mean(detach_numpy(discr_gen_out) > 0)
+    real_data, fake_data = y, gen_out
+    # l = torch.from_numpy((np.random.rand(nsamp) > 0.5).astype(np.float32)).cuda().view(nsamp,1,1)
+    l = torch.from_numpy((np.random.beta(0.5, 0.5, size=nsamp)).astype(np.float32)).cuda().view(nsamp,1,1)
+    x1 = l * real_data + (1-l) * fake_data
+    x2 = (1-l) * real_data + l * fake_data
+
+    l = 1 - l.view(-1,1)
+    discr_gen_out = discr.forward(x1, x2, x)
+    discr_gen_acc = np.mean((detach_numpy(discr_gen_out) > 0) == (detach_numpy(l) > 0.5))
 
     # cross entropy for GAN + l1 loss for reconstruction
-    gen_gan_loss = nn.BCEWithLogitsLoss()(discr_gen_out, torch.zeros(gen_out.shape[0], 1).cuda())
-    # gen_gan_loss = -torch.mean(discr_gen_out)
+    gen_gan_loss = nn.BCEWithLogitsLoss()(discr_gen_out, l).cuda()
     gen_mse_loss = torch.mean(torch.pow(gen_out - y, 2))
-    gen_loss = gen_gan_loss + gen_mse_loss
+    gen_loss = gen_gan_loss# + gen_mse_loss
     gen_loss.backward()
     gen_opt.step()
 
@@ -144,16 +154,11 @@ while True:
     discr_accs.append(discr_acc)
     discr_gen_accs.append(discr_gen_acc)
 
-    discr_losses = discr_losses[-100:]
-    discr_accs = discr_accs[-100:]
-    discr_gen_accs = discr_gen_accs[-100:]
-    gen_gan_losses = gen_gan_losses[-100:]
-    gen_mse_losses = gen_mse_losses[-100:]
+    discr_losses, discr_accs, discr_gen_accs, gen_gan_losses, gen_mse_losses = discr_losses[-100:], discr_accs[-100:], discr_gen_accs[-100:], gen_gan_losses[-100:], gen_mse_losses[-100:]
 
     # every once in a while, spit out a spectrogram of the low-bitrate mp3, the orig, and the
     # reconstruction
     if i % 100 == 0:
-        print(gen_out.max(), gen_out.min())
         print(np.mean(discr_accs), np.mean(discr_gen_accs), np.mean(discr_losses), np.mean(gen_gan_losses), np.mean(gen_mse_losses))
         plot_reconstruction(x[0], y[0], gen_out[0])
         
